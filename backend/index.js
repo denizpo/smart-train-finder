@@ -236,7 +236,7 @@ async function initializeCache() {
   let current = initialSearchDateTime
 
   while (current <= finalSearchDateTime) {
-    const hour = current.hour.toString().padStart(2, '0');  // Burada saat alınmalı
+    const hour = current.hour.toString().padStart(2, '0');
 
     const currentCopy = current; 
     const p = limiter.schedule({ priority: 0 }, () =>
