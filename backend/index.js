@@ -4,6 +4,7 @@ require('dotenv').config();
 const { parseStringPromise } = require('xml2js');
 const Bottleneck = require('bottleneck');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const { DateTime } = require('luxon');
 
 const app = express();
 const PORT = 3000;
@@ -20,8 +21,6 @@ const limitedFetch = limiter.wrap(fetch);
 
 const cacheEva = new Map();
 const cacheTimetable = new Map();
-
-const staticEvas = new Map();
 
 const EVA_MAP = {
   hamburg: '8002549',
@@ -41,12 +40,10 @@ function getMinutesDifference(start, end) {
 }
 
 const formatDateForDB = (date) => {
-  // date: Date objesi
-  const year = date.getFullYear().toString().slice(2);
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
-  return year + month + day;
+  const berlinDateTime = toBerlinDateTime(date);
+  return berlinDateTime.toFormat('yyLLdd'); // örn: "250607" (2025-06-07)
 };
+
 
 // only used with data coming from db api, so has berlin -> utc time conversion.
 function parseDateTimeFromDB(pt) {
@@ -73,12 +70,16 @@ function utcDateToBerlinHour(date) {
 }
 
 function berlinDateTimeToTimestamp(year, month, day, hour) {
-  const berlinTimeStr = `${year}-${(month + 1).toString().padStart(2,'0')}-${day.toString().padStart(2,'0')}T${hour.toString().padStart(2,'0')}:00:00`;
-  const utcDateStr = new Date(berlinTimeStr + 'Z').toLocaleString('en-US', { timeZone: 'Europe/Berlin' });
-  const berlinDate = new Date(utcDateStr);
-  return berlinDate.getTime();
+  const dt = DateTime.fromObject(
+    { year, month, day, hour, minute: 0, second: 0 },
+    { zone: 'Europe/Berlin' }
+  );
+  return dt.toMillis();
 }
 
+function toBerlinDateTime(date) {
+  return DateTime.fromJSDate(date, { zone: 'UTC' }).setZone('Europe/Berlin');
+}
 
 function timetableContainsTrainId(timetableData, trainId) {
   if (!timetableData || !timetableData.timetable) return false;
@@ -96,31 +97,36 @@ function timetableContainsTrainId(timetableData, trainId) {
 
 
 async function fetchTimetableRaw(eva, dateObj, hour) {
-  const dateStr = dateObj.toISOString().slice(0, 10);
+  const dateStr = formatDateForDB(dateObj);
   const key = `${eva}_${dateStr}_${hour}`;
+
   if (cacheTimetable.has(key)) return cacheTimetable.get(key);
 
   const promise = (async () => {
-    const url = `https://apis.deutschebahn.com/db-api-marketplace/apis/timetables/v1/plan/${eva}/${formatDateForDB(dateObj)}/${hour}`;
-    const res = await limitedFetch(url, {
-      headers: {
-        'DB-Client-Id': process.env.DB_CLIENT_ID,
-        'DB-Api-Key': process.env.DB_API_KEY,
-        accept: 'application/xml',
-      },
-    });
+    try {
+      const url = `https://apis.deutschebahn.com/db-api-marketplace/apis/timetables/v1/plan/${eva}/${formatDateForDB(dateObj)}/${hour}`;
+      const res = await limitedFetch(url, {
+        headers: {
+          'DB-Client-Id': process.env.DB_CLIENT_ID,
+          'DB-Api-Key': process.env.DB_API_KEY,
+          accept: 'application/xml',
+        },
+      });
 
-    if (!res.ok) {     
-      cacheTimetable.delete(key);
-      return null;
+      if (!res.ok) {     
+        cacheTimetable.delete(key);
+        return null;
+      }
+
+      const xml = await res.text();
+      const data = await parseStringPromise(xml, { explicitArray: false });
+
+      cacheTimetable.set(key, data);
+
+      return data;
+    } catch (error) {
+      console.error(error);
     }
-
-    const xml = await res.text();
-    const data = await parseStringPromise(xml, { explicitArray: false });
-
-    cacheTimetable.set(key, data);
-
-    return data;
   })();
 
   cacheTimetable.set(key, promise);
@@ -131,7 +137,7 @@ async function fetchTimetableWithFallback(eva, dateObj, startHour, minDepartureT
   let hourToCheck = startHour;
 
   if (minDepartureTime instanceof Date) {
-    const candidateHour = minDepartureTime.getUTCHours();
+    const candidateHour = toBerlinDateTime(minDepartureTime).hour;
     if (candidateHour > startHour) {
       hourToCheck = candidateHour;
     }
@@ -176,35 +182,39 @@ async function getEvaNo(stationName) {
   if (cacheEva.has(key)) return cacheEva.get(key);
 
   const promise = (async () => {
-    const url = `https://apis.deutschebahn.com/db-api-marketplace/apis/timetables/v1/station/${encodeURIComponent(stationName)}`;
-    const res = await limitedFetch(url, {
-      headers: {
-        'DB-Client-Id': process.env.DB_CLIENT_ID,
-        'DB-Api-Key': process.env.DB_API_KEY,
-        accept: 'application/xml',
-      },
-    });
+    try {
+      const url = `https://apis.deutschebahn.com/db-api-marketplace/apis/timetables/v1/station/${encodeURIComponent(stationName)}`;
+      const res = await limitedFetch(url, {
+        headers: {
+          'DB-Client-Id': process.env.DB_CLIENT_ID,
+          'DB-Api-Key': process.env.DB_API_KEY,
+          accept: 'application/xml',
+        },
+      });
 
-    if (!res.ok) {
-      cacheEva.set(key, null);
+      if (!res.ok) {
+        cacheEva.set(key, null);
+        return null;
+      }
+
+      const xml = await res.text();
+      const data = await parseStringPromise(xml, { explicitArray: false });
+
+      let stationEntry = null;
+      if (data.stations && data.stations.station) {
+        if (Array.isArray(data.stations.station)) {
+          stationEntry = data.stations.station.find(s => s.$.name.toLowerCase() === key) || data.stations.station[0];
+        } else {
+          stationEntry = data.stations.station;
+        }
+        if (stationEntry && stationEntry.$ && stationEntry.$.eva) {
+          return stationEntry.$.eva;
+        }
+      }
       return null;
+    } catch (error) {
+      cacheEva.delete(key);
     }
-
-    const xml = await res.text();
-    const data = await parseStringPromise(xml, { explicitArray: false });
-
-    let stationEntry = null;
-    if (data.stations && data.stations.station) {
-      if (Array.isArray(data.stations.station)) {
-        stationEntry = data.stations.station.find(s => s.$.name.toLowerCase() === key) || data.stations.station[0];
-      } else {
-        stationEntry = data.stations.station;
-      }
-      if (stationEntry && stationEntry.$ && stationEntry.$.eva) {
-        return stationEntry.$.eva;
-      }
-    }
-    return null;
   })();
 
   cacheEva.set(key, promise);
@@ -214,36 +224,38 @@ async function getEvaNo(stationName) {
 
 // used for pre-fetching data and filling cache. is this a hack?
 async function initializeCache() {
-  console.time("caching");
-  const date = new Date();
+  // console.time("caching");
+  const now = new Date();
+  const berlinNow = toBerlinDateTime(now);
 
-  const initialSearchDateTime = new Date(date.getTime() - 10 * 60 * 60 * 1000);
-  const finalSearchDateTime = new Date(date.getTime() + 18 * 60 * 60 * 1000);
+  const initialSearchDateTime = berlinNow.minus({ hours: 1 });
+  const finalSearchDateTime = berlinNow.plus({ hours: 18 });
 
   const promises = [];
 
-  let current = new Date(initialSearchDateTime);
-  current.setUTCMinutes(0, 0, 0);
+  let current = initialSearchDateTime
 
   while (current <= finalSearchDateTime) {
-    const calldateTime = new Date(current);
-    current.setUTCHours(current.getUTCHours() + 1);
+    const hour = current.hour.toString().padStart(2, '0');  // Burada saat alınmalı
 
+    const currentCopy = current; 
     const p = limiter.schedule({ priority: 0 }, () =>
-      findJourneys(EVA_MAP['hamburg'], EVA_MAP['amsterdam'], calldateTime, 3)
+      findJourneys(EVA_MAP['hamburg'], EVA_MAP['amsterdam'], currentCopy.toUTC().toJSDate(), 3)
     );
     promises.push(p);
+    
+    current = current.plus({ hours: 1 });
   }
 
   await Promise.all(promises);
-  console.timeEnd("caching");
+  // console.timeEnd("caching");
 }
 
 
 async function reviseCache() {
-  console.log("revising");
-  const now = Date.now();
-  const threshold = now - 13 * 60 * 60 * 1000;
+  const now = new Date();
+  const berlinNow = toBerlinDateTime(now);
+  const threshold = berlinNow.minus({ hours: 13 }).toMillis();
 
   // DB API says planned entries never cange, so removing only oldest hour slot should be ok for reliable data.
   for (const [key, value] of cacheTimetable.entries()) {
@@ -254,30 +266,27 @@ async function reviseCache() {
     const hourStr = parts[2];
 
     const year = 2000 + parseInt(dateStr.slice(0, 2), 10);
-    const month = parseInt(dateStr.slice(2, 4), 10) - 1; // 0 tabanlı ay
+    const month = parseInt(dateStr.slice(2, 4), 10);
     const day = parseInt(dateStr.slice(4, 6), 10);
     const hour = parseInt(hourStr, 10);
 
     const cacheTime = berlinDateTimeToTimestamp(year, month, day, hour);
-    console.log("revise cache berlin time: ", cacheTime);
-
+    
     if (cacheTime < threshold) {
       cacheTimetable.delete(key);
     }
   }
 
-  const newSearchDateTime = new Date(now + 18 * 60 * 60 * 1000);
-  newSearchDateTime.setUTCMinutes(0, 0, 0);
+  const newSearchDateTime = berlinNow.plus({ hours: 18 }).startOf('hour').toUTC().toJSDate();
   await findJourneys(EVA_MAP['hamburg'], EVA_MAP['amsterdam'], newSearchDateTime, 3)
-
 }
 
 
 function scheduleReviseCacheHourly() {
   const now = new Date();
   const nextHour = new Date(now);
-  nextHour.setMinutes(0, 0, 0);
-  //nextHour.setHours(nextHour.getHours() + 1);
+  nextHour.setMinutes(0, 0, 0); // here
+  nextHour.setHours(nextHour.getHours() + 1);
 
   const msUntilNextHour = nextHour - now;
 
@@ -292,9 +301,10 @@ function scheduleReviseCacheHourly() {
 
 
 async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1, maxStops = 20, maxDurationMinutes = 960) {
-  const berlinHour = parseInt(utcDateToBerlinHour(startDateTime), 10);
+  const berlinDateTime = toBerlinDateTime(startDateTime);
+  const berlinHour = parseInt(berlinDateTime.toFormat('HH'), 10);
 
-  //console.log(`Starting journey search from ${startEva} to ${targetEva} on ${dateStr} starting at Berlin hour ${berlinHour}`);
+  // console.log(`Starting journey search from ${startEva} to ${targetEva} on utc ${startDateTime.toISOString()} (berlin ${berlinDateTime}) starting at Berlin hour ${berlinHour}`);
   const startStationName = startEva === EVA_MAP['hamburg'] ? 'Hamburg Hbf' : 'Amsterdam Centraal';
 
   const queue = [{
@@ -314,7 +324,7 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
 
   while (queue.length > 0) {
     if (results.length >= 60) {
-      //console.log('Maximum 10 journeys found, stopping search.');
+      // console.log('Maximum 10 journeys found, stopping search.');
       return results;
     }
     const node = queue.shift();
@@ -326,14 +336,12 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
       if (journeyDuration > maxDurationMinutes) continue; // limit
     }
 
-    const visitedKey = `${node.stationId}_${node.trainId || ''}_${node.arrivalTime}`;
+    const visitedKey = `${node.stationId}_${node.currentTrainId || ''}_${node.arrivalTime}`;
     if (visited.has(visitedKey)) continue; // limit
     visited.add(visitedKey);
 
     if (node.stationId === targetEva) { // reached target, fetch data one last time to get arrival time
-      const dateWithHour = new Date(startDateTime);
-      dateWithHour.setUTCHours(berlinHour, 0, 0, 0);
-      const targetTimetable = await fetchTimetableWithFallback(targetEva, dateWithHour, (node.arrivalTime ? node.arrivalTime.getUTCHours() : berlinHour).toString().padStart(2, '0'), node.arrivalTime, node.currentTrainId);
+      const targetTimetable = await fetchTimetableWithFallback(targetEva, berlinDateTime, (node.arrivalTime ? node.arrivalTime.getUTCHours() : berlinHour).toString().padStart(2, '0'), node.arrivalTime, node.currentTrainId);
       if (targetTimetable) {
         let arrivals = targetTimetable?.timetable?.s || [];
         if (!Array.isArray(arrivals)) arrivals = [arrivals];
@@ -375,13 +383,14 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
     if (node.transfers > maxTransfers) continue; // limit
 
     const queryHour = node.arrivalTime // hour slot to make the next query
-      ? node.arrivalTime.getUTCHours().toString().padStart(2, '0')
-      : berlinHour.toString().padStart(2, '0'); // ??
+    ? toBerlinDateTime(node.arrivalTime).toFormat('HH')
+    : berlinHour.toString().padStart(2, '0');
 
-    const dateWithHour = new Date(startDateTime);
-    dateWithHour.setUTCHours(parseInt(queryHour, 10), 0, 0, 0);
+    const dateForFetch = node.arrivalTime
+    ? toBerlinDateTime(node.arrivalTime).toJSDate()  // startOf('day') kaldırıldı
+    : berlinDateTime.toJSDate();
 
-    const timetableData = await fetchTimetableWithFallback(node.stationId, dateWithHour, queryHour, node.arrivalTime, node.currentTrainId);
+    const timetableData = await fetchTimetableWithFallback(node.stationId, dateForFetch, queryHour, node.arrivalTime, node.currentTrainId);
     if (!timetableData) continue;
 
     let entriesRaw = timetableData?.timetable?.s || [];
@@ -436,7 +445,6 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
 
       let newTransfers = node.transfers;
       if (node.currentTrainId && node.currentTrainId !== trainId) { // possible change
-        //console.log("id: ", node.currentTrainId, " arrtime: ", node.arrivalTime, "deptime", departureDateTime, "curr train arr time: ", currentTrainArrivalTime )
         if (currentTrainArrivalTime && departureDateTime <= currentTrainArrivalTime) continue; // times dont match
         const waitMinutes = (departureDateTime - currentTrainArrivalTime) / (1000 * 60);
         if (waitMinutes > MAX_TRANSER_WAIT_MINS) continue; // limit
@@ -474,22 +482,22 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
   }
 
   if (results.length === 0) {
-    console.log(`No journey found from ${startEva} to ${targetEva}`);
+    // console.log(`No journey found from ${startEva} to ${targetEva}`);
     return null;
   }
 
-  console.log(`Journeys found: ${results.length}`);
+  // console.log(`Journeys found: ${results.length}`);
   return results;
 }
 
 
 app.get('/api/trips', async (req, res) => {
-  console.time('requestDuration');
+  // console.time('requestDuration');
 
   const { is_departure = "true", date, hour = '00' } = req.query;
   if (!date) return res.status(400).json({ error: "Missing 'date'" });
 
-  //console.log(`API called with date: ${date}, hour: ${hour}`);
+  // console.log(`API called with date: ${date}, hour: ${hour}`);
 
   const from = is_departure === 'true' ? 'hamburg' : 'amsterdam';
   const evaNo = EVA_MAP[from.toLowerCase()];
@@ -510,7 +518,7 @@ app.get('/api/trips', async (req, res) => {
       sections: journey.path,
     }));
 
-    console.timeEnd('requestDuration');
+    // console.timeEnd('requestDuration');
 
     res.json({ journeys: response });
   } catch (e) {
@@ -520,7 +528,7 @@ app.get('/api/trips', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Backend running at http://localhost:${PORT}`);
+  //console.log(`Backend running at http://localhost:${PORT}`);
 
   limiter.schedule({ priority: 0 }, () => initializeCache());
   scheduleReviseCacheHourly();
