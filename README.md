@@ -1,8 +1,8 @@
 # Smart Train Finder
 
 A web application to search train trips between Hamburg and Amsterdam.  
-Backend uses Deutsche Bahn API for timetable data.  
-Frontend is a React app.
+Backend uses Deutsche Bahn API to fetch timetable data.  
+Frontend is a React app. To investigate -> https://smart-train-finder-sage.vercel.app/
 
 ## Features
 
@@ -12,33 +12,37 @@ Frontend is a React app.
 
 ## Setup
 
-1. Clone this repo  
-2. Create a `.env` file in the `backend` folder with: 
+1. Clone this repo (& revert this commit: 83749db77a0abe42b067867a22038c051f0090e4 to work in local environment)
+2. Create an `.env` file in the `backend` folder with: 
 
-DB_CLIENT_ID=your_db_client_id
-DB_API_KEY=your_db_api_key
 
-More information on how to create your key can be found in https://developers.deutschebahn.com/db-api-marketplace/apis/marketplace
+> DB_CLIENT_ID=your_db_client_id
+> 
+> DB_API_KEY=your_db_api_key
+
+More information on how to create your key can be found in [here](https://developers.deutschebahn.com/db-api-marketplace/apis/marketplace)
 
 3. Install backend dependencies:
-../smart-train-finder/backend $ npm install
+``` ../smart-train-finder/backend $ npm install ```
 
 4. Install frontend dependencies and build frontend: 
-../smart-train-finder/frontend $ npm install
-../smart-train-finder/frontend $ npm run build (note down local and port here)
+``` ../smart-train-finder/frontend $ npm install ```
+``` ../smart-train-finder/frontend $ npm run build (note down local and port here) ```
 
 5. Start backend server:
-../smart-train-finder/backend $ npm start
+``` ../smart-train-finder/backend $ npm start ```
 
 6. Open browser and visit local in step 4
 
 
 
 
-USAGE
+## USAGE
 Edit input as desired (trip type, dates and times, sort by)
 
-NOTES:
+### NOTES:
 Price data is not available as DeutscheBahn API doesn't provide.
 Return date and time can be edited only if roundtrip is selected.
-API Data availability depends on DB API. You can always check https://developers.deutschebahn.com/db-api-marketplace/apis/product/timetables/api/17423#/Timetables_10213/operation/%2Fplan%2F{evaNo}%2F{date}%2F{hour}/get to double check data from DB API.
+API Data availability depends on DB API. You can always check  [here](https://developers.deutschebahn.com/db-api-marketplace/apis/product/timetables/api/17423#/Timetables_10213/operation/%2Fplan%2F{evaNo}%2F{date}%2F{hour}/get) to double check data from DB API.
+
+
