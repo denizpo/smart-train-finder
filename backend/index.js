@@ -7,7 +7,7 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 const { DateTime } = require('luxon');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 
@@ -528,7 +528,7 @@ app.get('/api/trips', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  //console.log(`Backend running at http://localhost:${PORT}`);
+  console.log(`Backend running on port ${PORT}`);
 
   limiter.schedule({ priority: 0 }, () => initializeCache());
   scheduleReviseCacheHourly();

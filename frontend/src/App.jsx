@@ -14,6 +14,8 @@ export default function App() {
 
   const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0'));
 
+  const BASE_URL = "https://smart-train-finder-c27y.onrender.com";
+
 const formatTime = (isoString) => {
   if (!isoString) return 'N/A';
   const date = new Date(isoString);
@@ -66,7 +68,7 @@ const formatDurationText = (dep, arr) => {
       // Outbound Hamburg → Amsterdam
       const utcDepartureHour = toUtcHour(departureHour, departureDate);
       const outboundRes = await fetch(
-        `http://localhost:3000/api/trips?is_departure=true&date=${departureDate}&hour=${utcDepartureHour.toString().padStart(2, '0')}`
+        `${BASE_URL}/api/trips?is_departure=true&date=${departureDate}&hour=${utcDepartureHour.toString().padStart(2, '0')}`
       );
       const outboundData = await outboundRes.json();
       let journeysOutbound = outboundData.journeys || [];
@@ -81,7 +83,7 @@ const formatDurationText = (dep, arr) => {
       if (tripType === "roundtrip") {
         const utcReturnHour = toUtcHour(returnHour, returnDate);
         const returnRes = await fetch(
-          `http://localhost:3000/api/trips?is_departure=false&date=${returnDate}&hour=${utcReturnHour.toString().padStart(2, '0')}`
+          `${BASE_URL}/api/trips?is_departure=false&date=${returnDate}&hour=${utcReturnHour.toString().padStart(2, '0')}`
         );
         const returnData = await returnRes.json();
         journeysReturn = returnData.journeys || [];
