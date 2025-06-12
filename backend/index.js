@@ -248,6 +248,7 @@ async function initializeCache() {
   }
 
   await Promise.all(promises);
+  console.log("end of initial caching");
   // console.timeEnd("caching");
 }
 
@@ -304,7 +305,7 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
   const berlinDateTime = toBerlinDateTime(startDateTime);
   const berlinHour = parseInt(berlinDateTime.toFormat('HH'), 10);
 
-  // console.log(`Starting journey search from ${startEva} to ${targetEva} on utc ${startDateTime.toISOString()} (berlin ${berlinDateTime}) starting at Berlin hour ${berlinHour}`);
+  console.log(`Starting journey search from ${startEva} to ${targetEva} on utc ${startDateTime.toISOString()} (berlin ${berlinDateTime}) starting at Berlin hour ${berlinHour}`);
   const startStationName = startEva === EVA_MAP['hamburg'] ? 'Hamburg Hbf' : 'Amsterdam Centraal';
 
   const queue = [{
@@ -323,7 +324,7 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
   const journeyCountMap = new Map();
 
   while (queue.length > 0) {
-    if (results.length >= 60) {
+    if (results.length >= 30) {
       // console.log('Maximum 10 journeys found, stopping search.');
       return results;
     }
@@ -482,11 +483,11 @@ async function findJourneys(startEva, targetEva, startDateTime, maxTransfers = 1
   }
 
   if (results.length === 0) {
-    // console.log(`No journey found from ${startEva} to ${targetEva}`);
+    console.log(`No journey found from ${startEva} to ${targetEva}`);
     return null;
   }
 
-  // console.log(`Journeys found: ${results.length}`);
+  console.log(`Journeys found: ${results.length}`);
   return results;
 }
 
@@ -497,7 +498,7 @@ app.get('/api/trips', async (req, res) => {
   const { is_departure = "true", date, hour = '00' } = req.query;
   if (!date) return res.status(400).json({ error: "Missing 'date'" });
 
-  // console.log(`API called with date: ${date}, hour: ${hour}`);
+  console.log(`API called with date: ${date}, hour: ${hour}`);
 
   const from = is_departure === 'true' ? 'hamburg' : 'amsterdam';
   const evaNo = EVA_MAP[from.toLowerCase()];
@@ -530,9 +531,12 @@ app.get('/api/trips', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend running on port ${PORT}`);
 
-  limiter.schedule({ priority: 0 }, () => initializeCache());
-  scheduleReviseCacheHourly();
+  //limiter.schedule({ priority: 0 }, () => initializeCache());
+  //scheduleReviseCacheHourly();
   setInterval(() => {
     cacheEva.clear();
   }, 24 * 60 * 60 * 1000); // 1 day
+  setInterval(() => {
+    cacheTimetable.clear();
+  }, 4 * 60 * 60 * 1000);
 });
